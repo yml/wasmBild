@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"html/template"
 	"image"
 	"math"
 	"strconv"
 	"strings"
 	"syscall/js"
-	"text/template"
 
 	"github.com/anthonynsimon/bild/adjust"
 	"github.com/anthonynsimon/bild/imgio"
@@ -25,9 +25,11 @@ const (
 func main() {
 	println("starting go wasm")
 	app := NewApp()
-	app.AddListeners()
-
-	<-app.done
+	jsa := NewJsApp(*app)
+	select {
+	case <-jsa.done:
+		jsa.Release()
+	}
 	println("ending go wasm")
 }
 
@@ -68,7 +70,6 @@ func (eff *Effect) Render() string {
 }
 
 type App struct {
-	done       chan struct{}
 	buf        bytes.Buffer
 	cnt        int
 	dstWidth   int
@@ -79,7 +80,6 @@ type App struct {
 
 func NewApp() *App {
 	return &App{
-		done:     make(chan struct{}),
 		effects:  make([]Effect, 0),
 		cnt:      0,
 		dstWidth: 200,
@@ -135,60 +135,48 @@ func (app *App) PreviewImg() image.Image {
 	return img
 }
 
-func (app *App) jsUpdateImgSrcById(Id string) {
-	enc := imgio.JPEGEncoder(90)
-	err := enc(&app.buf, app.PreviewImg())
-	if err != nil {
-		log(err.Error())
+type JsApp struct {
+	App
+	done chan struct{}
+
+	ShutdownCallback      js.Callback
+	UploadCallback        js.Callback
+	AddEffectCallback     js.Callback
+	ChangeEffectsCallback js.Callback
+
+	buf bytes.Buffer
+}
+
+func NewJsApp(app App) *JsApp {
+	jsa := &JsApp{
+		App:  app,
+		done: make(chan struct{}),
 	}
-	// setting the previewImg src property
-	getElementById(Id).
-		Set("src", jpegPrefix+base64.StdEncoding.EncodeToString(app.buf.Bytes()))
-	app.buf.Reset()
-}
 
-func (app *App) AddListeners() {
-	app.addShutdownBtnClickListener()
-	app.uploadFileChangeListener()
-	app.addEffectBtnClickListener()
-	app.effectsChangeListener()
-}
+	jsa.ShutdownCallback = js.NewEventCallback(js.StopPropagation, func(ev js.Value) {
+		log("event", ev)
+		ev.Get("target").Set("disabled", true)
+		getElementById("status").Set("innerText", "go wasm app is closed")
+		jsa.done <- struct{}{}
+	})
+	getElementById("shutdownBtn").Call("addEventListener", "click", jsa.ShutdownCallback)
 
-func (app *App) uploadFileChangeListener() {
-	getElementById("uploader").Call("addEventListener", "change", js.NewEventCallback(js.PreventDefault, func(ev js.Value) {
+	jsa.UploadCallback = js.NewEventCallback(js.PreventDefault, func(ev js.Value) {
+		log("event", ev)
 		file := ev.Get("target").Get("files").Get("0")
 		freader := js.Global().Get("FileReader").New()
 		freader.Set("onload", js.NewEventCallback(js.PreventDefault, func(ev js.Value) {
-			app.NewSourceImgFromString(ev.Get("target").Get("result").String())
-			app.jsUpdateImgSrcById("previewImg")
-			app.jsUpdateImgSrcById("targetImg")
+			jsa.NewSourceImgFromString(ev.Get("target").Get("result").String())
+			jsa.UpdateImgSrcById("previewImg", jsa.resizedImg)
+			jsa.UpdateImgSrcById("targetImg", jsa.PreviewImg())
 		}))
 		freader.Call("readAsDataURL", file)
-	}))
-}
+	})
+	getElementById("uploader").Call("addEventListener", "change", jsa.UploadCallback)
 
-func (app *App) addShutdownBtnClickListener() {
-	getElementById("shutdownBtn").Call("addEventListener", "click", js.NewEventCallback(js.StopPropagation, func(ev js.Value) {
+	jsa.AddEffectCallback = js.NewEventCallback(js.StopPropagation, func(ev js.Value) {
 		log("event", ev)
-		ev.Get("srcElement").Set("disabled", true)
-		getElementById("status").Set("innerText", "go wasm app is closed")
-		app.done <- struct{}{}
-	}))
-}
-
-func (app *App) effectsChangeListener() {
-	// document.getElementById("effects").addEventListener("change", function(ev){console.log(ev.target.id, ev.target.value)})
-	getElementById("effects").Call("addEventListener", "change", js.NewEventCallback(js.PreventDefault, func(ev js.Value) {
-		log("event", ev)
-		app.Update(ev.Get("target").Get("id").String(), ev.Get("target").Get("valueAsNumber").Float())
-		app.jsUpdateImgSrcById("targetImg")
-	}))
-}
-
-func (app *App) addEffectBtnClickListener() {
-	getElementById("addEffectBtn").Call("addEventListener", "click", js.NewEventCallback(js.StopPropagation, func(ev js.Value) {
-		log("event", ev)
-		app.cnt++
+		jsa.cnt++
 		effectSelector := getElementById("effectSelector")
 		effectSelected := effectSelector.Get("options").Call("item", effectSelector.Get("selectedIndex"))
 		log(effectSelected)
@@ -199,9 +187,42 @@ func (app *App) addEffectBtnClickListener() {
 			Min:   2,
 			Max:   2,
 		}
-		app.Append(eff)
+		jsa.Append(eff)
 		getElementById("effects").Call("insertAdjacentHTML", "beforeend", eff.Render())
-	}))
+	})
+	getElementById("addEffectBtn").Call("addEventListener", "click", jsa.AddEffectCallback)
+
+	jsa.ChangeEffectsCallback = js.NewEventCallback(js.PreventDefault, func(ev js.Value) {
+		log("event", ev)
+		jsa.Update(ev.Get("target").Get("id").String(), ev.Get("target").Get("valueAsNumber").Float())
+		jsa.UpdateImgSrcById("targetImg", jsa.PreviewImg())
+	})
+	getElementById("effects").Call("addEventListener", "change", jsa.ChangeEffectsCallback)
+
+	return jsa
+}
+
+func (jsa *JsApp) Release() {
+	// In tip callback.Close() is renamed callback.Release()
+	jsa.ShutdownCallback.Close()
+	jsa.UploadCallback.Close()
+	jsa.AddEffectCallback.Close()
+	jsa.ChangeEffectsCallback.Close()
+}
+
+func (jsa *JsApp) UpdateImgSrcById(Id string, img image.Image) {
+	if img == nil {
+		return
+	}
+	enc := imgio.JPEGEncoder(90)
+	err := enc(&jsa.buf, img)
+	if err != nil {
+		log(err.Error())
+	}
+	// setting the previewImg src property
+	getElementById(Id).
+		Set("src", jpegPrefix+base64.StdEncoding.EncodeToString(jsa.buf.Bytes()))
+	jsa.buf.Reset()
 }
 
 func getElementById(Id string) js.Value {
