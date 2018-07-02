@@ -6,6 +6,7 @@ wasmBild is an image transformation web UI based on the
 The idea and some of the code have been extracted from
 [shimmer](https://github.com/agnivade/shimmer)
 
+![Screenshot](screenshot.png)
 ### Setup
 
 - Continuous compilation on change `reflex -s -g "*.go" -- sh -c 'echo "compiling" && GOOS=js GOARCH=wasm ~/gowasm/bin/go build -o main.wasm .'`
