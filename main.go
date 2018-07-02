@@ -92,7 +92,7 @@ type App struct {
 	sourceImg  image.Image
 	resizedImg image.Image
 
-	effects []Effect
+	Effects []Effect
 
 	transformations []Transformation
 }
@@ -100,7 +100,7 @@ type App struct {
 func NewApp() *App {
 	return &App{
 		transformations: make([]Transformation, 0),
-		effects: []Effect{
+		Effects: []Effect{
 			Effect{
 				Name: "contrast",
 				Min:  -2,
@@ -120,6 +120,39 @@ func NewApp() *App {
 		cnt:      0,
 		dstWidth: 200,
 	}
+}
+
+var appTmpl = `
+      <div id="uploader">
+        <input type="file" value="" name="uploader" id="uploader"/>
+      </div>
+      <div class="separator">preview:</div>
+        <div>
+                <image id="previewImg" class="image" />
+                <image id="targetImg" class="image" />
+        </div>
+
+      <div class="separator">Select an effect:</div>
+      <select name="effect" id="effectSelector">
+	  {{ range .Effects }}<option name="{{ .Name }}" id="{{ .Name }}">{{ .Name }}</option>{{ end }}
+      </select>
+      <button id="addEffectBtn">Add</button>
+      <div id="effects">
+      </div>
+`
+
+func (app *App) Render() string {
+	var rendered strings.Builder
+	tmpl, err := template.New("app").Parse(appTmpl)
+	if err != nil {
+		// log(err)
+		fmt.Println(err)
+	}
+	err = tmpl.Execute(&rendered, app)
+	if err != nil {
+		fmt.Println(err)
+	}
+	return rendered.String()
 }
 
 func (app *App) Append(t Transformation) {
@@ -189,6 +222,8 @@ func NewJsApp(app App) *JsApp {
 		App:  app,
 		done: make(chan struct{}),
 	}
+
+	getElementById("app").Call("insertAdjacentHTML", "beforeend", jsa.App.Render())
 
 	jsa.ShutdownCallback = js.NewEventCallback(js.StopPropagation, func(ev js.Value) {
 		log("event", ev)
