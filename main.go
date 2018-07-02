@@ -12,6 +12,7 @@ import (
 	"syscall/js"
 
 	"github.com/anthonynsimon/bild/adjust"
+	"github.com/anthonynsimon/bild/effect"
 	"github.com/anthonynsimon/bild/imgio"
 	"github.com/anthonynsimon/bild/transform"
 )
@@ -33,22 +34,21 @@ func main() {
 	println("ending go wasm")
 }
 
-var effectTmpl = `<div><label for="{{ .Name }}">{{ .Name }}</label><input type="range" min="-{{ .Min }}" max="{{ .Max}}" value="0" step="0.1" id="{{ .Id }}"></div>`
-
 type effectFn func(image.Image) image.Image
 
 type Effect struct {
-	Id, Name string
-	Value    float64
+	Name     string
 	Min, Max int
 }
 
-func (eff *Effect) GetEffectFn() effectFn {
+func (eff *Effect) GetEffectFn(values ...float64) effectFn {
 	switch eff.Name {
 	case "brightness":
-		return func(img image.Image) image.Image { return adjust.Brightness(img, eff.Value) }
+		return func(img image.Image) image.Image { return adjust.Brightness(img, values[0]) }
 	case "contrast":
-		return func(img image.Image) image.Image { return adjust.Contrast(img, eff.Value) }
+		return func(img image.Image) image.Image { return adjust.Contrast(img, values[0]) }
+	case "edge-detection":
+		return func(img image.Image) image.Image { return effect.EdgeDetection(img, values[0]) }
 
 	default:
 		log("effect not found: ", eff.Name)
@@ -56,13 +56,29 @@ func (eff *Effect) GetEffectFn() effectFn {
 	}
 }
 
-func (eff *Effect) Render() string {
+var transformationTmpl = `<div><label for="{{ .Name }}">{{ .Name }}</label><input type="range" min="{{ .Min }}" max="{{ .Max}}" value="0" step="0.1" id="{{ .Id }}"></div>`
+
+type transformFn func(values ...float64) effectFn
+
+type Transformation struct {
+	Effect
+	Id     string
+	Values []float64
+	Fn     transformFn
+}
+
+func (t *Transformation) Transform() effectFn {
+
+	return t.Fn(t.Values...)
+}
+
+func (t *Transformation) Render() string {
 	var rendered strings.Builder
-	tmpl, err := template.New(eff.Name).Parse(effectTmpl)
+	tmpl, err := template.New(t.Name).Parse(transformationTmpl)
 	if err != nil {
 		log(err)
 	}
-	err = tmpl.Execute(&rendered, eff)
+	err = tmpl.Execute(&rendered, t)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -75,27 +91,47 @@ type App struct {
 	dstWidth   int
 	sourceImg  image.Image
 	resizedImg image.Image
-	effects    []Effect
+
+	effects []Effect
+
+	transformations []Transformation
 }
 
 func NewApp() *App {
 	return &App{
-		effects:  make([]Effect, 0),
+		transformations: make([]Transformation, 0),
+		effects: []Effect{
+			Effect{
+				Name: "contrast",
+				Min:  -2,
+				Max:  2,
+			},
+			Effect{
+				Name: "brightness",
+				Min:  -2,
+				Max:  2,
+			},
+			Effect{
+				Name: "edge-detection",
+				Min:  -2,
+				Max:  2,
+			},
+		},
 		cnt:      0,
 		dstWidth: 200,
 	}
 }
 
-func (app *App) Append(eff Effect) {
-	app.effects = append(app.effects, eff)
-	log("lenght of app.effects", len(app.effects))
+func (app *App) Append(t Transformation) {
+	app.transformations = append(app.transformations, t)
+	log("lenght of app.transformations", len(app.transformations))
 }
 
-func (app *App) Update(Id string, value float64) {
-	for i, v := range app.effects {
-		if v.Id == Id {
-			v.Value = value
-			app.effects[i] = v
+func (app *App) Update(Id string, values ...float64) {
+	for i, t := range app.transformations {
+		if t.Id == Id {
+			t.Values = values
+			app.transformations[i] = t
 			break
 		}
 	}
@@ -129,8 +165,9 @@ func (app *App) NewSourceImgFromString(simg string) {
 
 func (app *App) PreviewImg() image.Image {
 	img := app.resizedImg
-	for _, eff := range app.effects {
-		img = eff.GetEffectFn()(img)
+	for _, t := range app.transformations {
+		log(t.Id)
+		img = t.Transform()(img)
 	}
 	return img
 }
@@ -157,6 +194,7 @@ func NewJsApp(app App) *JsApp {
 		log("event", ev)
 		ev.Get("target").Set("disabled", true)
 		getElementById("status").Set("innerText", "go wasm app is closed")
+		getElementById("app").Set("innerHTML", "")
 		jsa.done <- struct{}{}
 	})
 	getElementById("shutdownBtn").Call("addEventListener", "click", jsa.ShutdownCallback)
@@ -181,14 +219,18 @@ func NewJsApp(app App) *JsApp {
 		effectSelected := effectSelector.Get("options").Call("item", effectSelector.Get("selectedIndex"))
 		log(effectSelected)
 		eff := Effect{
-			Id:    effectSelected.Get("id").String() + strconv.Itoa(app.cnt),
-			Name:  effectSelected.Get("id").String(),
-			Value: 0, // default value
-			Min:   2,
-			Max:   2,
+			Name: effectSelected.Get("id").String(),
+			Min:  -2,
+			Max:  2,
 		}
-		jsa.Append(eff)
-		getElementById("effects").Call("insertAdjacentHTML", "beforeend", eff.Render())
+		t := Transformation{
+			Effect: eff,
+			Id:     effectSelected.Get("id").String() + strconv.Itoa(jsa.cnt),
+			Values: []float64{0}, // default value
+			Fn:     eff.GetEffectFn,
+		}
+		jsa.Append(t)
+		getElementById("effects").Call("insertAdjacentHTML", "beforeend", t.Render())
 	})
 	getElementById("addEffectBtn").Call("addEventListener", "click", jsa.AddEffectCallback)
 
