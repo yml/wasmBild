@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+Copyright 2018 The Go Authors. All rights reserved.
+Use of this source code is governed by a BSD-style
+license that can be found in the LICENSE file.
+-->
+<html>
+
+<head>
+	<meta charset="utf-8">
+	<title>Go wasm</title>
+</head>
+
+<body>
+    <div id="header">
+      <div id="status"></div>
+      <div>
+        <button id="shutdownBtn" disabled>Shutdown</button>
+      </div>
+    </div>
+    <div id="app">
+      <div id="uploader">
+        <input type="file" value="" name="uploader" id="uploader"/>
+      </div>
+      <div class="separator">preview:</div>
+        <div>
+                <image id="previewImg" class="image" />
+                <image id="targetImg" class="image" />
+        </div>
+
+      <div class="separator">Select an effect:</div>
+      <select name="effect" id="effectSelector">
+        <option name="brightness" id="brightness" multiple size="1">Brightness</option>
+        <option name="contrast" id="contrast" multiple size="1">Contrast</option>
+      </select>
+      <button id="addEffectBtn">Add</button>
+      <div id="effects">
+      </div>
+    </div>
+	<script src="wasm_exec.js"></script>
+	<script>
+		if (!WebAssembly.instantiateStreaming) { // polyfill
+			WebAssembly.instantiateStreaming = async (resp, importObject) => {
+				const source = await (await resp).arrayBuffer();
+				return await WebAssembly.instantiate(source, importObject);
+			};
+		}
+
+		const go = new Go();
+		let mod, inst;
+        document.getElementById('status').innerText = "Initializing wasm...";
+		WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
+			mod = result.module;
+			inst = result.instance;
+			document.getElementById("shutdownBtn").disabled = false;
+			document.getElementById('status').innerText = "Initialization complete.";
+			run();
+		});
+
+		async function run() {
+			console.clear();
+			await go.run(inst);
+			inst = await WebAssembly.instantiate(mod, go.importObject); // reset instance
+		}
+	</script>
+</body>
+
+</html>
