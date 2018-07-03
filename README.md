@@ -3,6 +3,8 @@
 wasmBild is an image transformation web UI based on the
 [Bild](https://github.com/anthonynsimon/bild).
 
+`wasmBild` requires Go 1.11 (currently in Beta).
+
 The idea and some of the code have been extracted from
 [shimmer](https://github.com/agnivade/shimmer)
 
